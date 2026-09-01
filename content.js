@@ -17,6 +17,10 @@
   const PADDING_CSS_PX = 8;
   const CAPTURE_HISTORY_KEY = "testEvidenceCaptureHistory";
   const CAPTURE_HISTORY_LIMIT = 5;
+  const CAPTURE_INTERVAL_MS = 550;
+  const MAX_CAPTURE_TILES = 100;
+  const MAX_OUTPUT_DIMENSION_PX = 32767;
+  const MAX_OUTPUT_PIXELS = 100000000;
   const INPUT_SETTINGS_KEY = "testEvidenceCaptureInputSettings";
   const DEFAULT_INPUT_SETTINGS = Object.freeze({
     prefix: "AC",
@@ -25,6 +29,7 @@
     timing: "before",
     timingEnabled: true,
     includeTooltips: true,
+    captureBeyondViewport: false,
   });
   const BLOCKED_MOUSE_EVENTS = [
     "pointerup",
@@ -54,7 +59,7 @@
 
   function startCaptureMode() {
     if (session?.active) {
-      setStatus("撮影モード中 · 右クリック/Spaceで選択 · Enterで保存 · Escで終了");
+      setStatus("撮影モード中 · 右クリック/Spaceで選択 · 撮影ボタン/Enterで保存 · Escで終了");
       return;
     }
 
@@ -72,6 +77,8 @@
       filenameControls: ui.filenameControls,
       selectionList: ui.selectionList,
       selectionSummary: ui.selectionSummary,
+      selectionDetails: ui.selectionDetails,
+      captureButton: ui.captureButton,
       hoverElement: null,
       selectedElements: new Set(),
       selectedBoxes: new Map(),
@@ -153,9 +160,11 @@
       historyList,
       selectionList,
       selectionSummary,
+      selectionDetails,
+      captureButton,
     } = createFilenamePanel();
     const status = document.createElement("div");
-    status.textContent = "撮影モード · 右クリック/Spaceで選択 · Shiftで追加 · ↑で親要素 · Enterで保存 · Escで終了";
+    status.textContent = "撮影モード · 右クリック/Spaceで選択 · Shiftで追加 · ↑で親要素 · 撮影ボタン/Enterで保存 · Escで終了";
     setImportantStyles(status, {
       all: "initial",
       position: "fixed",
@@ -199,6 +208,8 @@
       historyList,
       selectionList,
       selectionSummary,
+      selectionDetails,
+      captureButton,
     };
   }
 
@@ -432,6 +443,47 @@
     });
     tooltipSetting.append(includeTooltipsCheckbox, tooltipSettingText);
 
+    const captureBeyondViewportCheckbox = document.createElement("input");
+    captureBeyondViewportCheckbox.type = "checkbox";
+    captureBeyondViewportCheckbox.checked = false;
+    captureBeyondViewportCheckbox.setAttribute(
+      "aria-label",
+      "viewport外の選択DOMも自動スクロールして撮影する",
+    );
+    setImportantStyles(captureBeyondViewportCheckbox, {
+      all: "initial",
+      display: "block",
+      width: "14px",
+      height: "14px",
+      appearance: "auto",
+      cursor: "pointer",
+      pointerEvents: "auto",
+    });
+    const captureBeyondViewportSetting = document.createElement("label");
+    const captureBeyondViewportText = document.createElement("span");
+    captureBeyondViewportText.textContent = "viewport外も自動スクロール撮影";
+    setImportantStyles(captureBeyondViewportSetting, {
+      all: "initial",
+      display: "flex",
+      alignItems: "center",
+      gap: "7px",
+      marginTop: "7px",
+      color: "#3a3a3c",
+      font: "12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif",
+      cursor: "pointer",
+      pointerEvents: "auto",
+    });
+    setImportantStyles(captureBeyondViewportText, {
+      all: "initial",
+      display: "block",
+      color: "#3a3a3c",
+      font: "12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif",
+    });
+    captureBeyondViewportSetting.append(
+      captureBeyondViewportCheckbox,
+      captureBeyondViewportText,
+    );
+
     const selectionDetails = document.createElement("details");
     setImportantStyles(selectionDetails, {
       all: "initial",
@@ -581,6 +633,22 @@
     });
     destinationRow.append(destinationName, chooseDirectoryButton);
 
+    const captureButton = createSecondaryButton("撮影する (Enter)");
+    captureButton.setAttribute("aria-label", "選択中のDOMを撮影して保存");
+    setImportantStyles(captureButton, {
+      width: "100%",
+      marginTop: "10px",
+      padding: "8px 10px",
+      border: "1px solid #006edb",
+      background: "#0a84ff",
+      color: "#ffffff",
+      font: "700 12px/1.2 -apple-system, BlinkMacSystemFont, sans-serif",
+      textAlign: "center",
+    });
+    captureButton.addEventListener("click", () => {
+      void captureSelection();
+    });
+
     const historyTitle = document.createElement("div");
     historyTitle.textContent = "直近のDOM選択";
     setImportantStyles(historyTitle, {
@@ -611,8 +679,10 @@
       fields,
       timingSection,
       tooltipSetting,
+      captureBeyondViewportSetting,
       selectionDetails,
       destinationRow,
+      captureButton,
       historySection,
     );
     controls = {
@@ -620,6 +690,7 @@
       numberInputs,
       optionalNumberCheckboxes,
       includeTooltipsCheckbox,
+      captureBeyondViewportCheckbox,
       timingEnabledCheckbox,
       getTiming: () => timing,
       setTiming: selectTiming,
@@ -645,6 +716,7 @@
     }
     timingEnabledCheckbox.addEventListener("change", persistSettings);
     includeTooltipsCheckbox.addEventListener("change", persistSettings);
+    captureBeyondViewportCheckbox.addEventListener("change", persistSettings);
     clearSettingsButton.addEventListener("click", async () => {
       const confirmed = globalThis.confirm(
         "証跡の入力設定を初期値に戻しますか？\n保存先とスクショ履歴は削除されません。",
@@ -663,6 +735,8 @@
       historyList,
       selectionList,
       selectionSummary,
+      selectionDetails,
+      captureButton,
       controls,
     };
   }
@@ -1119,8 +1193,8 @@
       findVisibleTooltipTargets({ width: window.innerWidth, height: window.innerHeight }).length > 0;
     setStatus(
       includesVisibleTooltip
-        ? `Spaceで${session.selectedElements.size}件選択済み · Tooltipも紫枠で撮影対象 · Enterで保存`
-        : `${source === "space" ? "Spaceで" : ""}${session.selectedElements.size}件選択中 · Shiftで追加・解除 · Enterで保存`,
+        ? `Spaceで${session.selectedElements.size}件選択済み · Tooltipも紫枠で撮影対象 · 撮影ボタン/Enterで保存`
+        : `${source === "space" ? "Spaceで" : ""}${session.selectedElements.size}件選択中 · Shiftで追加・解除 · 撮影ボタン/Enterで保存`,
     );
   }
 
@@ -1376,11 +1450,31 @@
       return;
     }
 
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
     const elements = [...session.selectedElements].filter((element) => element.isConnected);
-    const bounds = calculateCaptureBoundsForElements(elements, viewport);
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const documentSurface = getDocumentSurface();
+    const captureBeyondViewport =
+      session.filenameControls.captureBeyondViewportCheckbox.checked;
+    if (
+      !captureBeyondViewport &&
+      elements.some((element) => !isVisibleRect(element.getBoundingClientRect(), viewport))
+    ) {
+      setStatus(
+        "viewport外の選択DOMがあります · 自動スクロール撮影をONにするか対象を解除してください",
+      );
+      return;
+    }
+
+    const viewportBounds = captureBeyondViewport
+      ? null
+      : calculateCaptureBoundsForElements(elements, viewport);
+    const bounds = captureBeyondViewport
+      ? calculateDocumentCaptureBounds(elements, viewport, documentSurface)
+      : viewportBounds
+        ? toDocumentRect(viewportBounds)
+        : null;
     if (!bounds) {
-      setStatus("選択範囲が現在のviewport内にありません");
+      setStatus("選択DOMの撮影範囲を計算できませんでした");
       return;
     }
 
@@ -1393,15 +1487,13 @@
     const annotationIndexes = elements.flatMap((element, index) =>
       session.annotatedElements.has(element) ? [index] : [],
     );
-    const annotationRects = calculateAnnotationRects(
-      elements,
-      annotationIndexes,
-      viewport,
-    );
+    const annotationRects = captureBeyondViewport
+      ? calculateDocumentAnnotationRects(elements, annotationIndexes, documentSurface)
+      : calculateViewportAnnotationRects(elements, annotationIndexes, viewport);
     await captureBounds(bounds, selectors, annotationIndexes, annotationRects);
   }
 
-  async function captureHistoryRecord(record) {
+  function restoreHistoryRecord(record) {
     if (!session?.active || session.capturing) {
       return;
     }
@@ -1412,28 +1504,23 @@
       return;
     }
 
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    if (elements.some((element) => !isVisibleRect(element.getBoundingClientRect(), viewport))) {
-      setStatus("履歴の対象DOMをviewport内へスクロールしてから再実行してください");
-      return;
-    }
-
-    const bounds = calculateCaptureBoundsForElements(elements, viewport);
-    if (!bounds) {
-      setStatus("履歴のDOM範囲を計算できませんでした");
-      return;
-    }
-
     const annotationIndexes = TestEvidenceHistory.normalizeAnnotationIndexes(
       record.annotationIndexes,
       elements.length,
     );
-    const annotationRects = calculateAnnotationRects(
-      elements,
-      annotationIndexes,
-      viewport,
+    clearSelections();
+    for (const element of elements) {
+      addSelection(element);
+    }
+    for (const index of annotationIndexes) {
+      setElementAnnotated(elements[index], true);
+    }
+    renderSelectionList();
+    session.selectionDetails.open = true;
+    elements[0].scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    setStatus(
+      `履歴から${elements.length}件を選択しました · 範囲を確認して撮影ボタン/Enterで保存`,
     );
-    await captureBounds(bounds, record.selectors, annotationIndexes, annotationRects);
   }
 
   async function captureBounds(
@@ -1451,22 +1538,14 @@
     const destination = session.filenameControls.getDestination();
     const captureSession = session;
     captureSession.capturing = true;
+    captureSession.captureButton.disabled = true;
+    captureSession.captureButton.style.setProperty("opacity", "0.55", "important");
     captureSession.host.style.setProperty("display", "none", "important");
     let uiHidden = true;
     let completionMessage = null;
 
     try {
-      // Ensure Chrome paints a frame without the extension UI before capture.
-      await nextAnimationFrame();
-      await nextAnimationFrame();
-
-      const capture = await sendMessage({
-        type: MESSAGE.CAPTURE_VISIBLE_TAB,
-        crop: { bounds, viewport },
-      });
-      if (!capture?.ok) {
-        throw new Error(capture?.error || "Screenshot capture failed.");
-      }
+      const croppedPng = await captureDocumentBounds(bounds, annotationRects);
       if (session !== captureSession) {
         return;
       }
@@ -1474,16 +1553,6 @@
       captureSession.host.style.removeProperty("display");
       uiHidden = false;
       setStatus(`保存中: ${filename}`);
-
-      const croppedPng = await cropScreenshot(
-        capture.dataUrl,
-        capture.crop?.bounds || bounds,
-        capture.crop?.viewport || viewport,
-        annotationRects,
-      );
-      if (session !== captureSession) {
-        return;
-      }
       if (destination.directoryHandle) {
         try {
           const savedFilename = await TestEvidenceStorage.savePngToDirectory(
@@ -1525,16 +1594,18 @@
       await rememberCapture(bounds, selectors, annotationIndexes, filename, viewport);
     } catch (error) {
       console.error("[Test Evidence Capture]", error);
-      completionMessage = "保存に失敗しました。Consoleを確認してください";
+      completionMessage = `保存に失敗しました: ${error.message || "Consoleを確認してください"}`;
     } finally {
       if (session === captureSession) {
         if (uiHidden) {
           captureSession.host.style.removeProperty("display");
         }
         captureSession.capturing = false;
+        captureSession.captureButton.disabled = false;
+        captureSession.captureButton.style.setProperty("opacity", "1", "important");
         setStatus(
           completionMessage ||
-            "撮影モード中 · 右クリック/Spaceで選択 · Shiftで追加 · Enterで保存 · Escで終了",
+            "撮影モード中 · 右クリック/Spaceで選択 · Shiftで追加 · 撮影ボタン/Enterで保存 · Escで終了",
         );
       }
     }
@@ -1543,7 +1614,7 @@
   async function loadCaptureHistory(targetSession) {
     try {
       const stored = await getLocalStorage(CAPTURE_HISTORY_KEY);
-      if (session !== targetSession || targetSession.filenameControls.settingsDirty) {
+      if (session !== targetSession) {
         return;
       }
       targetSession.historyRecords = TestEvidenceHistory.normalizeRecords(
@@ -1562,7 +1633,7 @@
   async function loadInputSettings(targetSession) {
     try {
       const stored = await getLocalStorage(INPUT_SETTINGS_KEY);
-      if (session !== targetSession) {
+      if (session !== targetSession || targetSession.filenameControls.settingsDirty) {
         return;
       }
       applyInputSettings(
@@ -1596,6 +1667,7 @@
       timing: controls.getTiming(),
       timingEnabled: controls.timingEnabledCheckbox.checked,
       includeTooltips: controls.includeTooltipsCheckbox.checked,
+      captureBeyondViewport: controls.captureBeyondViewportCheckbox.checked,
     });
   }
 
@@ -1619,6 +1691,7 @@
         : DEFAULT_INPUT_SETTINGS.timing,
       timingEnabled: value?.timingEnabled !== false,
       includeTooltips: value?.includeTooltips !== false,
+      captureBeyondViewport: value?.captureBeyondViewport === true,
     };
   }
 
@@ -1635,6 +1708,7 @@
     controls.timingEnabledCheckbox.checked = normalized.timingEnabled;
     controls.syncTimingEnabled();
     controls.includeTooltipsCheckbox.checked = normalized.includeTooltips;
+    controls.captureBeyondViewportCheckbox.checked = normalized.captureBeyondViewport;
   }
 
   async function rememberCapture(
@@ -1702,7 +1776,7 @@
       const width = record.bounds.width ?? record.bounds.right - record.bounds.left;
       const height = record.bounds.height ?? record.bounds.bottom - record.bounds.top;
       const button = createSecondaryButton(record.filename);
-      button.title = `${record.filename} · ${record.selectors.length} DOM · 赤枠 ${record.annotationIndexes.length}件 · 撮影時 ${Math.round(width)}×${Math.round(height)} CSS px`;
+      button.title = `クリックで選択を復元 · ${record.filename} · ${record.selectors.length} DOM · 赤枠 ${record.annotationIndexes.length}件 · 撮影時 ${Math.round(width)}×${Math.round(height)} CSS px`;
       setImportantStyles(button, {
         width: "100%",
         overflow: "hidden",
@@ -1711,7 +1785,7 @@
         whiteSpace: "nowrap",
       });
       button.addEventListener("click", () => {
-        void captureHistoryRecord(record);
+        restoreHistoryRecord(record);
       });
       session.historyList.append(button);
     }
@@ -1870,7 +1944,38 @@
     );
   }
 
-  function calculateAnnotationRects(elements, annotationIndexes, viewport) {
+  function calculateDocumentCaptureBounds(elements, viewport, documentSurface) {
+    const visibleTooltips = session.filenameControls.includeTooltipsCheckbox.checked
+      ? findVisibleTooltipTargets(viewport)
+      : [];
+    const targets = [...new Set([...elements, ...visibleTooltips])].map((element) => {
+      const rect = toDocumentRect(element.getBoundingClientRect());
+      return { getBoundingClientRect: () => rect };
+    });
+    return TestEvidenceBounds.calculateBounds(
+      targets,
+      documentSurface.width,
+      documentSurface.height,
+      PADDING_CSS_PX,
+    );
+  }
+
+  function calculateDocumentAnnotationRects(elements, annotationIndexes, documentSurface) {
+    return annotationIndexes
+      .map((index) => elements[index])
+      .filter((element) => element?.isConnected)
+      .map((element) => {
+        const documentRect = toDocumentRect(element.getBoundingClientRect());
+        return TestEvidenceAnnotations.calculateFrameRect(
+          documentRect,
+          documentSurface.width,
+          documentSurface.height,
+        );
+      })
+      .filter(Boolean);
+  }
+
+  function calculateViewportAnnotationRects(elements, annotationIndexes, viewport) {
     return annotationIndexes
       .map((index) => elements[index])
       .filter((element) => element?.isConnected)
@@ -1881,7 +1986,25 @@
           viewport.height,
         ),
       )
-      .filter(Boolean);
+      .filter(Boolean)
+      .map(toDocumentRect);
+  }
+
+  function toDocumentRect(rect) {
+    const left = rect.left + window.scrollX;
+    const top = rect.top + window.scrollY;
+    const right = rect.right + window.scrollX;
+    const bottom = rect.bottom + window.scrollY;
+    return { left, top, right, bottom, width: rect.width, height: rect.height };
+  }
+
+  function getDocumentSurface() {
+    const root = document.documentElement;
+    const body = document.body;
+    return {
+      width: Math.max(window.innerWidth, root.scrollWidth, body?.scrollWidth || 0),
+      height: Math.max(window.innerHeight, root.scrollHeight, body?.scrollHeight || 0),
+    };
   }
 
   function findVisibleTooltipTargets(viewport) {
@@ -1979,40 +2102,135 @@
     void notifyCaptureModeState(false);
   }
 
-  async function cropScreenshot(dataUrl, bounds, viewport, annotationRects = []) {
-    const image = await loadImage(dataUrl);
-    const crop = TestEvidenceBounds.calculateCrop(
-      bounds,
-      image.naturalWidth,
-      image.naturalHeight,
+  async function captureDocumentBounds(bounds, annotationRects = []) {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const surface = getDocumentSurface();
+    const originalScroll = { x: window.scrollX, y: window.scrollY };
+    const xPositions = TestEvidenceBounds.calculateScrollPositions(
+      bounds.left,
+      bounds.right,
       viewport.width,
-      viewport.height,
+      Math.max(0, surface.width - viewport.width),
+      originalScroll.x,
     );
-    if (!crop) {
-      throw new Error("The selected area could not be mapped to screenshot pixels.");
+    const yPositions = TestEvidenceBounds.calculateScrollPositions(
+      bounds.top,
+      bounds.bottom,
+      viewport.height,
+      Math.max(0, surface.height - viewport.height),
+      originalScroll.y,
+    );
+    const tileCount = xPositions.length * yPositions.length;
+    if (tileCount > MAX_CAPTURE_TILES) {
+      throw new Error(`撮影範囲が広すぎます（最大${MAX_CAPTURE_TILES}画面）`);
     }
 
-    const canvas = document.createElement("canvas");
-    canvas.width = crop.width;
-    canvas.height = crop.height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      throw new Error("Canvas 2D is unavailable.");
+    let canvas = null;
+    let context = null;
+    let scaleX = null;
+    let scaleY = null;
+    let captureIndex = 0;
+
+    try {
+      for (const y of yPositions) {
+        for (const x of xPositions) {
+          window.scrollTo({ left: x, top: y, behavior: "instant" });
+          await nextAnimationFrame();
+          await nextAnimationFrame();
+          if (captureIndex > 0) {
+            await delay(CAPTURE_INTERVAL_MS);
+          }
+
+          const tileScroll = { x: window.scrollX, y: window.scrollY };
+          const capture = await sendMessage({ type: MESSAGE.CAPTURE_VISIBLE_TAB });
+          if (!capture?.ok) {
+            throw new Error(capture?.error || "Screenshot capture failed.");
+          }
+          const image = await loadImage(capture.dataUrl);
+          const tileScaleX = image.naturalWidth / viewport.width;
+          const tileScaleY = image.naturalHeight / viewport.height;
+          if (!canvas) {
+            scaleX = tileScaleX;
+            scaleY = tileScaleY;
+            const outputWidth = Math.ceil(bounds.width * scaleX);
+            const outputHeight = Math.ceil(bounds.height * scaleY);
+            if (
+              outputWidth > MAX_OUTPUT_DIMENSION_PX ||
+              outputHeight > MAX_OUTPUT_DIMENSION_PX ||
+              outputWidth * outputHeight > MAX_OUTPUT_PIXELS
+            ) {
+              throw new Error("撮影範囲が画像サイズの上限を超えています");
+            }
+            canvas = document.createElement("canvas");
+            canvas.width = outputWidth;
+            canvas.height = outputHeight;
+            context = canvas.getContext("2d");
+            if (!context) {
+              throw new Error("Canvas 2D is unavailable.");
+            }
+          } else if (
+            Math.abs(tileScaleX - scaleX) > 0.01 ||
+            Math.abs(tileScaleY - scaleY) > 0.01
+          ) {
+            throw new Error("撮影中にブラウザの画像倍率が変化しました");
+          }
+
+          drawCapturedTile(
+            context,
+            image,
+            bounds,
+            viewport,
+            tileScroll,
+            scaleX,
+            scaleY,
+          );
+          captureIndex += 1;
+        }
+      }
+
+      if (!canvas || !context || scaleX === null || scaleY === null) {
+        throw new Error("スクリーンショットを取得できませんでした");
+      }
+      drawAnnotationFrames(context, annotationRects, {
+        left: bounds.left * scaleX,
+        top: bounds.top * scaleY,
+        width: canvas.width,
+        height: canvas.height,
+        scaleX,
+        scaleY,
+      });
+      return canvas.toDataURL("image/png");
+    } finally {
+      window.scrollTo({
+        left: originalScroll.x,
+        top: originalScroll.y,
+        behavior: "instant",
+      });
+      await nextAnimationFrame();
+      await nextAnimationFrame();
+    }
+  }
+
+  function drawCapturedTile(context, image, bounds, viewport, tileScroll, scaleX, scaleY) {
+    const left = Math.max(bounds.left, tileScroll.x);
+    const top = Math.max(bounds.top, tileScroll.y);
+    const right = Math.min(bounds.right, tileScroll.x + viewport.width);
+    const bottom = Math.min(bounds.bottom, tileScroll.y + viewport.height);
+    if (right <= left || bottom <= top) {
+      return;
     }
 
     context.drawImage(
       image,
-      crop.left,
-      crop.top,
-      crop.width,
-      crop.height,
-      0,
-      0,
-      crop.width,
-      crop.height,
+      (left - tileScroll.x) * scaleX,
+      (top - tileScroll.y) * scaleY,
+      (right - left) * scaleX,
+      (bottom - top) * scaleY,
+      (left - bounds.left) * scaleX,
+      (top - bounds.top) * scaleY,
+      (right - left) * scaleX,
+      (bottom - top) * scaleY,
     );
-    drawAnnotationFrames(context, annotationRects, crop);
-    return canvas.toDataURL("image/png");
   }
 
   function drawAnnotationFrames(context, annotationRects, crop) {
@@ -2078,6 +2296,10 @@
 
   function nextAnimationFrame() {
     return new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+
+  function delay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
   function createFilenameFromControls(controls) {

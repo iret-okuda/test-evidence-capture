@@ -63,6 +63,30 @@
     };
   }
 
+  function calculateScrollPositions(start, end, viewportSize, maximumScroll, currentScroll) {
+    if (
+      ![start, end, viewportSize, maximumScroll, currentScroll].every(Number.isFinite) ||
+      end <= start ||
+      viewportSize <= 0 ||
+      maximumScroll < 0
+    ) {
+      return [];
+    }
+    if (start >= currentScroll && end <= currentScroll + viewportSize) {
+      return [currentScroll];
+    }
+
+    const positions = [clamp(Math.floor(start), 0, maximumScroll)];
+    while (positions.at(-1) + viewportSize < end) {
+      const next = Math.min(maximumScroll, positions.at(-1) + viewportSize);
+      if (next <= positions.at(-1)) {
+        break;
+      }
+      positions.push(next);
+    }
+    return positions;
+  }
+
   function calculatePseudoElementRect(containerRect, style) {
     const containingWidth = containerRect.width;
     const containingHeight = containerRect.height;
@@ -215,6 +239,7 @@
   global.TestEvidenceBounds = Object.freeze({
     calculateBounds,
     calculateCrop,
+    calculateScrollPositions,
     calculatePseudoElementRect,
   });
 })(globalThis);

@@ -73,29 +73,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === MESSAGE.CAPTURE_VISIBLE_TAB) {
-    if (!Number.isInteger(sender.tab?.windowId)) {
+    if (!Number.isInteger(sender.tab?.id) || !Number.isInteger(sender.tab?.windowId)) {
       sendResponse({ ok: false, error: "The sender tab is unavailable." });
       return false;
     }
 
-    chrome.tabs.captureVisibleTab(
-      sender.tab.windowId,
-      { format: "png" },
-      (dataUrl) => {
-        const error = chrome.runtime.lastError;
-        if (error || !dataUrl) {
-          sendResponse({
-            ok: false,
-            error: error?.message || "Chrome returned no screenshot data.",
-          });
-          return;
-        }
-
-        // Echo the CSS-pixel crop contract supplied by the content script so
-        // the response and bitmap are handled as one capture result.
-        sendResponse({ ok: true, dataUrl, crop: message.crop });
-      },
-    );
+    chrome.tabs.query({ active: true, windowId: sender.tab.windowId }, (tabs) => {
+      const queryError = chrome.runtime.lastError;
+      if (queryError || tabs?.[0]?.id !== sender.tab.id) {
+        sendResponse({
+          ok: false,
+          error: queryError?.message || "撮影中は対象タブを表示したままにしてください",
+        });
+        return;
+      }
+      chrome.tabs.captureVisibleTab(
+        sender.tab.windowId,
+        { format: "png" },
+        (dataUrl) => {
+          const error = chrome.runtime.lastError;
+          if (error || !dataUrl) {
+            sendResponse({
+              ok: false,
+              error: error?.message || "Chrome returned no screenshot data.",
+            });
+            return;
+          }
+          sendResponse({ ok: true, dataUrl });
+        },
+      );
+    });
     return true;
   }
 

@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 require("../bounds.js");
 
-const { calculateBounds, calculateCrop, calculatePseudoElementRect } =
+const { calculateBounds, calculateCrop, calculateScrollPositions, calculatePseudoElementRect } =
   globalThis.TestEvidenceBounds;
 
 function elementWithRect(rect) {
@@ -92,6 +92,11 @@ function elementWithRect(rect) {
   );
   assert.equal(bounds, null);
 }
+
+assert.deepEqual(calculateScrollPositions(120, 500, 800, 2200, 100), [100]);
+assert.deepEqual(calculateScrollPositions(100, 1900, 800, 2200, 500), [100, 900, 1700]);
+assert.deepEqual(calculateScrollPositions(2500, 2900, 800, 2200, 0), [2200]);
+assert.deepEqual(calculateScrollPositions(10, 10, 800, 2200, 0), []);
 
 {
   const rect = calculatePseudoElementRect(
